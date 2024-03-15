@@ -7,6 +7,7 @@ import (
 	cls "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 	"time"
 	"unsafe"
+        "log"
 )
 
 var ProducerInstance *cls.AsyncProducerClient
@@ -16,6 +17,7 @@ var TopicId = ""
 //export FLBPluginRegister
 func FLBPluginRegister(ctx unsafe.Pointer) int {
 	// Gets called only once when the plugin.so is loaded
+        log.Printf("[fluent-bit-go-cls] Register called")
 	return output.FLBPluginRegister(ctx, "fluent-bit-go-cls", "fluent-bit-go-cls")
 }
 
@@ -29,6 +31,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	producerConfig.TotalSizeLnBytes = 500 * 1024 * 1024
 	producerConfig.Retries = 10
 	TopicId = output.FLBPluginConfigKey(plugin, "TopicID")
+        id := output.FLBPluginConfigKey(plugin, "Id")
 
 	var err error
 	ProducerInstance, err = cls.NewAsyncProducerClient(producerConfig)
@@ -38,12 +41,20 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 	// 异步发送程序，需要启动
 	ProducerInstance.Start()
-	fmt.Printf("[info] cls log producer init success \n")
+
+	log.Printf("[Cls init] id = %q, topicid = %s", id, TopicId)
+	// Set the context to point to any Go variable
+	output.FLBPluginSetContext(plugin, TopicId)
+
 	return output.FLB_OK
 }
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
+        // Type assert context back into the original type for the Go variable
+	TopicId = output.FLBPluginGetContext(ctx).(string)
+	log.Printf("[Cls] Flush called for id: %s", TopicId)
+
 	// Gets called with a batch of records to be written to an instance.
 	if ProducerInstance == nil {
 		fmt.Printf("[error] cls log producer is nil \n")
@@ -63,7 +74,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 		case uint64:
 			logTime = time.Unix(int64(t), 0)
 		default:
-			fmt.Println("[warn] unknown timestamp format.")
+			fmt.Println("[warn cls] unknown timestamp format.")
 			logTime = time.Now()
 		}
 
@@ -83,6 +94,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 		if len(contents) == 0 {
 			continue
 		}
+                
+                fmt.Printf("Contents: %v",contents)
+
 		log := cls.NewCLSLog(logTime.Unix(), contents)
 		logs = append(logs, log)
 	}
@@ -102,6 +116,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 
 //export FLBPluginExit
 func FLBPluginExit() int {
+        log.Print("[go cls] Exit called for unknown instance")
 	return output.FLB_OK
 }
 
